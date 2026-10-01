@@ -1,14 +1,32 @@
 {
-  "version": "1.92.1",
+  "version": "1.95.0",
   "changes": {
     "en-US": [
-      "If the AI sidebar encounters an error, notes remain available to view and edit. The sidebar offers Retry and Close actions."
+      "Structured tables can now be created and edited through MCP, including table schemas and record operations.",
+      "Note body colors have been refined. The removed Plum palette in saved settings falls back to the default appearance.",
+      "The local Agent now supports Claude Code, OpenClaw, and Hermes. Compatible agents can access notes for the current session; note context is optional, generated images are kept locally, and activity and settings are clearer.",
+      "Copying notes for publishing now shows progress, and copying to WeChat preserves LaTeX formulas.",
+      "Infographics can be generated from the AI sidebar and exported as readable images.",
+      "Changing a password now works from an existing desktop sign-in session.",
+      "The note menu is simpler, with theme and repository rows removed."
     ],
     "zh-CN": [
-      "AI 侧栏出错时，笔记仍可查看和编辑。侧栏提供重试和关闭操作。"
+      "现在可以通过 MCP 创建和编辑结构化表格，包括表结构与记录的增删改查。",
+      "笔记正文配色已调整；此前保存的梅红配色会回退为默认外观。",
+      "本机 Agent 新增 Claude Code、OpenClaw 和 Hermes 支持。兼容的 Agent 可在当前会话访问笔记；当前笔记上下文可选，生成的图片会保存在本机，活动和设置显示也更清楚。",
+      "复制笔记用于发布时会显示进度；复制到微信时会保留 LaTeX 公式。",
+      "现在可以在 AI 侧栏生成信息图，并将其导出为清晰易读的图片。",
+      "使用现有桌面端登录会话时，现在可以正常修改密码。",
+      "笔记菜单移除了主题和仓库条目，内容更简洁。"
     ],
     "ja": [
-      "AI サイドバーでエラーが起きても、ノートの閲覧と編集を続けられます。サイドバーから再試行または閉じることができます。"
+      "MCP から構造化テーブルのスキーマとレコードを作成・編集できるようになりました。",
+      "ノート本文の配色を調整しました。保存済みの Plum 配色は標準の外観に戻ります。",
+      "ローカル Agent が Claude Code、OpenClaw、Hermes に対応しました。対応する Agent は現在のセッションでノートにアクセスでき、ノート文脈は任意です。生成画像はローカルに保存され、操作状況と設定も見やすくなりました。",
+      "公開用にノートをコピーすると進行状況が表示され、微信へのコピーでは LaTeX 数式が保持されます。",
+      "AI サイドバーからインフォグラフィックを生成し、読みやすい画像として書き出せます。",
+      "既存のデスクトップのログインセッションからパスワードを変更できるようになりました。",
+      "ノートメニューからテーマとリポジトリの項目を外し、表示を簡潔にしました。"
     ]
   }
 }

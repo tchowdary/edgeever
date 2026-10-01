@@ -10,6 +10,8 @@ import {
   AI_SIDEBAR_ADAPTER_PATH_KEY,
   AI_SIDEBAR_SOURCE_KEY,
   listDesktopAcpAdapters,
+  installDesktopAcpAdapter,
+  authenticateDesktopAcpAdapter,
   probeDesktopAcpAdapter,
   type AiSidebarSource,
   type DesktopAcpAdapter,
@@ -25,30 +27,48 @@ import {
   SETTINGS_ITEM_TITLE_CLASSNAME,
 } from "./settings-ui";
 
-const adapterIds: DesktopAcpAdapterId[] = ["codex", "antigravity"];
-
-const agentCatalog = [
-  { id: "codex", connectable: true },
-  { id: "antigravity", connectable: true },
-  { id: "claudeCode", connectable: false },
-  { id: "workbuddy", connectable: false },
-  { id: "grokBuild", connectable: false },
-] as const;
+const adapterIds: DesktopAcpAdapterId[] = ["codex", "claudeCode", "antigravity", "openClaw", "hermesAgent", "grokBuild", "deepseekHarness", "piAgent", "workbuddyCn", "workbuddyIntl"];
 
 const readSource = (): AiSidebarSource => (
   localStorage.getItem(AI_SIDEBAR_SOURCE_KEY) === "local" ? "local" : "builtin"
 );
 
-const readAdapterId = (): DesktopAcpAdapterId => (
-  localStorage.getItem(AI_SIDEBAR_ADAPTER_KEY) === "antigravity" ? "antigravity" : "codex"
-);
+const readAdapterId = (): DesktopAcpAdapterId => {
+  const stored = localStorage.getItem(AI_SIDEBAR_ADAPTER_KEY);
+  return adapterIds.find((id) => id === stored) ?? "codex";
+};
 
 const statusKey = (adapter: DesktopAcpAdapter | undefined, probing: boolean) => {
   if (probing) return "aiAssistant.agentSource.probing";
   if (!adapter || adapter.detail === "not_probed") return "aiAssistant.agentSource.notProbed";
   if (adapter.detail === "invalid_path") return "aiAssistant.agentSource.invalidPath";
   if (adapter.detail === "desktop_unavailable") return "aiAssistant.agentSource.localDisabled";
+  if (adapter.id === "grokBuild" && adapter.state === "not_installed") return "aiAssistant.agentSource.grokBuildNotFound";
+  if (adapter.id === "claudeCode" && adapter.state === "not_installed") return "aiAssistant.agentSource.claudeCodeNotFound";
+  if (adapter.id === "openClaw" && adapter.state === "not_installed") return "aiAssistant.agentSource.openClawNotFound";
+  if (adapter.id === "hermesAgent" && adapter.state === "not_installed") return "aiAssistant.agentSource.hermesAgentNotFound";
+  if (adapter.id === "deepseekHarness" && adapter.state === "not_installed") return "aiAssistant.agentSource.deepseekHarnessNotFound";
+  if (adapter.id === "piAgent" && adapter.state === "not_installed") return adapter.detail === "adapter_missing" ? "aiAssistant.agentSource.piAgentAdapterMissing" : "aiAssistant.agentSource.piAgentNotFound";
+  if ((adapter.id === "workbuddyCn" || adapter.id === "workbuddyIntl") && adapter.state === "not_installed") return "aiAssistant.agentSource.workbuddyNotFound";
   return `aiAssistant.agentSource.states.${adapter.state}`;
+};
+
+const getStatusTone = ({
+  probing,
+  installing,
+  installError,
+  state,
+}: {
+  probing: boolean;
+  installing: boolean;
+  installError: boolean;
+  state?: DesktopAcpAdapter["state"];
+}) => {
+  if (installing || probing) return "loading";
+  if (installError || state === "failed") return "error";
+  if (state === "available") return "success";
+  if (state === "needs_login" || state === "not_installed") return "warning";
+  return "neutral";
 };
 
 const desktopBridgeAvailable = () => (
@@ -64,6 +84,9 @@ const DesktopAcpAgentCardBody = ({ bridge }: { bridge: boolean }) => {
   const [listed, setListed] = useState<DesktopAcpAdapter[]>([]);
   const [probed, setProbed] = useState<DesktopAcpAdapter | null>(null);
   const [probing, setProbing] = useState(false);
+  const [installing, setInstalling] = useState(false);
+  const [installError, setInstallError] = useState(false);
+  const [authenticating, setAuthenticating] = useState(false);
 
   useEffect(() => {
     const stored = readSource();
@@ -82,24 +105,83 @@ const DesktopAcpAgentCardBody = ({ bridge }: { bridge: boolean }) => {
 
   useEffect(() => {
     let cancelled = false;
-    void listDesktopAcpAdapters().then((adapters) => {
+    const refresh = () => void listDesktopAcpAdapters().then((adapters) => {
       if (!cancelled) setListed(adapters);
     }).catch(() => {});
+    refresh();
+    const interval = window.setInterval(refresh, 5_000);
     return () => {
       cancelled = true;
+      window.clearInterval(interval);
     };
   }, []);
 
-  const shown = probed?.id === adapterId ? probed : listed.find((adapter) => adapter.id === adapterId);
+  const listedCurrent = listed.find((adapter) => adapter.id === adapterId);
+  const shown = listedCurrent?.state === "installing" || (listedCurrent?.managed && (!probed?.managed || listedCurrent.version !== probed.version))
+    ? listedCurrent
+    : probed?.id === adapterId ? probed : listedCurrent;
   const status = t(statusKey(shown, probing));
+  const tone = getStatusTone({
+    probing,
+    installing,
+    installError,
+    state: shown?.state,
+  });
+  const hasDetails = Boolean(
+    shown?.state === "not_installed" ||
+    shown?.state === "needs_login" ||
+    shown?.updateError
+  );
+  const authMethods = shown?.authMethods?.filter((method) => (
+    adapterId === "workbuddyCn" ? method.id !== "external" : adapterId === "workbuddyIntl" ? method.id !== "internal" : true
+  )) ?? [];
 
   const selectAdapter = (id: DesktopAcpAdapterId) => {
     setAdapterId(id);
     setProbed(null);
+    setInstallError(false);
+  };
+
+  const install = async () => {
+    if (adapterId !== "codex" && adapterId !== "antigravity" && adapterId !== "piAgent") return;
+    setInstalling(true);
+    setInstallError(false);
+    try {
+      const result = await installDesktopAcpAdapter(adapterId);
+      if (result.updated) {
+        if (adapterId === "antigravity") setAdapterPath("");
+        setListed(await listDesktopAcpAdapters());
+        if (result.adapter) setProbed({ ...result.adapter, version: result.version, managed: true });
+      } else {
+        setInstallError(true);
+      }
+    } catch {
+      setInstallError(true);
+    } finally {
+      setInstalling(false);
+    }
+  };
+
+  const authenticate = async (methodId: string) => {
+    setAuthenticating(true);
+    setInstallError(false);
+    try {
+      const result = await authenticateDesktopAcpAdapter({
+        id: adapterId,
+        methodId,
+        ...(adapterId === "antigravity" && adapterPath.trim() ? { path: adapterPath.trim() } : {}),
+      });
+      setProbed(result);
+    } catch {
+      setProbed({ id: adapterId, label: t(`aiAssistant.agentSource.${adapterId}`), state: "failed" });
+    } finally {
+      setAuthenticating(false);
+    }
   };
 
   const probe = async () => {
     setProbing(true);
+    setInstallError(false);
     try {
       const result = await probeDesktopAcpAdapter({
         id: adapterId,
@@ -107,7 +189,7 @@ const DesktopAcpAgentCardBody = ({ bridge }: { bridge: boolean }) => {
       });
       setProbed(result);
     } catch {
-      setProbed({ id: adapterId, label: adapterId === "codex" ? "Codex" : "Antigravity", state: "failed" });
+      setProbed({ id: adapterId, label: t(`aiAssistant.agentSource.${adapterId}`), state: "failed" });
     } finally {
       setProbing(false);
     }
@@ -150,10 +232,10 @@ const DesktopAcpAgentCardBody = ({ bridge }: { bridge: boolean }) => {
                 </label>
                 {disabled ? (
                   <div role="group" className="flex flex-wrap gap-2 px-3.5 pb-3 pl-9" aria-label={t("aiAssistant.agentSource.adapter")}>
-                    {agentCatalog.map((agent) => (
-                      <span key={agent.id} className="flex h-8 items-center gap-2 rounded-md border border-slate-200 px-2.5 text-xs text-slate-500">
+                    {adapterIds.map((id) => (
+                      <span key={id} className="flex h-8 items-center gap-2 rounded-md border border-slate-200 px-2.5 text-xs text-slate-500">
                         <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-slate-300" />
-                        {t(`aiAssistant.agentSource.${agent.id}`)}
+                        {t(`aiAssistant.agentSource.${id}`)}
                       </span>
                     ))}
                   </div>
@@ -189,12 +271,6 @@ const DesktopAcpAgentCardBody = ({ bridge }: { bridge: boolean }) => {
                   </label>
                 );
               })}
-              {agentCatalog.filter((agent) => !agent.connectable).map((agent) => (
-                <span key={agent.id} className="flex h-8 cursor-not-allowed items-center gap-2 rounded-md border border-slate-200 px-2.5 text-xs text-slate-400">
-                  <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-slate-300" />
-                  {t(`aiAssistant.agentSource.${agent.id}`)}
-                </span>
-              ))}
             </div>
 
             {adapterId === "antigravity" ? (
@@ -227,11 +303,95 @@ const DesktopAcpAgentCardBody = ({ bridge }: { bridge: boolean }) => {
               </label>
             ) : null}
 
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-xs leading-5 text-slate-600" role="status">{status}</p>
-              <Button type="button" variant="outline" size="sm" className="h-8 bg-card text-xs font-normal" disabled={probing} title={t("aiAssistant.agentSource.probeHint")} onClick={() => void probe()}>
-                {probing ? t("aiAssistant.agentSource.probing") : t("aiAssistant.agentSource.probe")}
-              </Button>
+            <div className="space-y-2.5 pt-1">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
+                  <span
+                    aria-hidden="true"
+                    className={cn(
+                      "inline-block h-2 w-2 shrink-0 rounded-full",
+                      tone === "success" && "bg-emerald-500 shadow-[0_0_4px_rgba(16,185,129,0.5)]",
+                      tone === "loading" && "bg-amber-500 animate-pulse",
+                      tone === "warning" && "bg-amber-500",
+                      tone === "error" && "bg-rose-500 shadow-[0_0_4px_rgba(244,63,94,0.5)]",
+                      tone === "neutral" && "bg-slate-400"
+                    )}
+                  />
+                  <span
+                    role="status"
+                    className={cn(
+                      "text-xs font-medium leading-5",
+                      tone === "error" ? "text-rose-700" : tone === "warning" ? "text-amber-800" : "text-slate-900"
+                    )}
+                  >
+                    {installing ? t("aiAssistant.agentSource.installing") : installError ? t("aiAssistant.agentSource.installFailed") : status}
+                  </span>
+                  {shown?.version ? (
+                    <span className="inline-flex items-center rounded bg-slate-200/60 px-1.5 py-0.5 font-mono text-[11px] font-medium text-slate-600">
+                      v{shown.version}
+                    </span>
+                  ) : null}
+                  {shown?.managed ? (
+                    <span className="text-[11px] text-slate-400">
+                      {t("aiAssistant.agentSource.autoUpdated")}
+                    </span>
+                  ) : null}
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  {shown?.state === "not_installed" && (adapterId === "codex" || adapterId === "antigravity" || (adapterId === "piAgent" && shown?.detail === "adapter_missing")) ? (
+                    <Button type="button" variant="outline" size="sm" className="h-8 bg-card text-xs font-normal" disabled={installing || probing} onClick={() => void install()}>
+                      {installing ? t("aiAssistant.agentSource.installing") : t("aiAssistant.agentSource.install")}
+                    </Button>
+                  ) : null}
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span><Button type="button" variant="outline" size="sm" className="h-8 bg-card text-xs font-normal" disabled={probing || installing} onClick={() => void probe()}>
+                          {probing ? t("aiAssistant.agentSource.probing") : t("aiAssistant.agentSource.probe")}
+                        </Button></span>
+                      </TooltipTrigger>
+                      <TooltipContent>{t("aiAssistant.agentSource.probeHint")}</TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </div>
+              </div>
+
+              {hasDetails ? (
+                <div className="space-y-2">
+                  {shown?.state === "not_installed" ? (
+                    <p className="text-xs leading-relaxed text-slate-600">
+                      {t(adapterId === "claudeCode" ? "aiAssistant.agentSource.claudeCodeMissingHint" : adapterId === "openClaw" ? "aiAssistant.agentSource.openClawMissingHint" : adapterId === "hermesAgent" ? "aiAssistant.agentSource.hermesAgentMissingHint" : adapterId === "grokBuild" ? "aiAssistant.agentSource.grokBuildMissingHint" : adapterId === "deepseekHarness" ? "aiAssistant.agentSource.deepseekHarnessMissingHint" : adapterId === "piAgent" ? shown.detail === "adapter_missing" ? "aiAssistant.agentSource.piAgentAdapterMissingHint" : "aiAssistant.agentSource.piAgentMissingHint" : adapterId === "workbuddyCn" || adapterId === "workbuddyIntl" ? "aiAssistant.agentSource.workbuddyMissingHint" : "aiAssistant.agentSource.installHint")}
+                    </p>
+                  ) : null}
+                  {shown?.state === "needs_login" && adapterId === "piAgent" ? (
+                    <p className="text-xs leading-relaxed text-slate-600">{t("aiAssistant.agentSource.piAgentLoginHint")}</p>
+                  ) : null}
+                  {shown?.state === "needs_login" && (adapterId === "workbuddyCn" || adapterId === "workbuddyIntl") ? (
+                    <p className="text-xs leading-relaxed text-slate-600">{t(adapterId === "workbuddyCn" ? "aiAssistant.agentSource.workbuddyCnLoginHint" : "aiAssistant.agentSource.workbuddyIntlLoginHint")}</p>
+                  ) : null}
+                  {shown?.state === "needs_login" && authMethods.length ? (
+                    <div className="flex flex-wrap gap-2 pt-0.5">
+                      {authMethods.map((method) => (
+                        <Button key={method.id} type="button" variant="outline" size="sm" className="h-8 bg-card text-xs font-normal" disabled={authenticating} onClick={() => void authenticate(method.id)}>
+                          {authenticating ? t("aiAssistant.agentSource.authenticating") : t("aiAssistant.agentSource.authenticateWith", { method: method.name })}
+                        </Button>
+                      ))}
+                    </div>
+                  ) : null}
+                  {shown?.state === "needs_login" && !authMethods.length && adapterId !== "piAgent" ? (
+                    <p className="text-xs text-amber-700" role="status">{t("aiAssistant.agentSource.loginUnavailable")}</p>
+                  ) : null}
+                  {shown?.updateError ? (
+                    <p className="text-xs text-amber-700" role="status">{t("aiAssistant.agentSource.updateFailed")}</p>
+                  ) : null}
+                </div>
+              ) : null}
+              {adapterId === "openClaw" ? (
+                <p className="text-xs leading-relaxed text-amber-700">{t("aiAssistant.agentSource.openClawNoteAccessHint")}</p>
+              ) : null}
+              {adapterId === "hermesAgent" && (shown?.state === "failed" || shown?.state === "needs_login") ? (
+                <p className="text-xs leading-relaxed text-amber-700">{t("aiAssistant.agentSource.hermesAgentSetupHint")}</p>
+              ) : null}
             </div>
           </div>
         ) : null}
